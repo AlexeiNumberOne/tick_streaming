@@ -1,0 +1,7 @@
+pydantic==2.13.2
+pydantic_settings==2.13.1
+SQLAlchemy==2.0.49
+ccxt==4.5.51
+psycopg[binary]==3.3.3
+clickhouse-sqlalchemy==0.3.2
+clickhouse-driver==0.2.10
