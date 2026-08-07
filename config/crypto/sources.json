@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "name": "binance",
+      "markets": [
+        {"type": "spot", "enable": true},
+        {"type": "swap", "enable": false},
+        {"type": "option", "enable": false},
+        {"type": "future", "enable": false}
+      ]
+    }
+  ]
+}
