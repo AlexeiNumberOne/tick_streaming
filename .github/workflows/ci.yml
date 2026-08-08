@@ -24,13 +24,6 @@ jobs:
     runs-on: ubuntu-latest
     # Запуск только при событии pull_request
     if: github.event_name == 'pull_request'
-    container:
-      image: docker:dind
-      options: --privileged
-    services:
-      docker:
-        image: docker:stable-dind
-        options: --privileged
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
