@@ -1,0 +1,13 @@
+websockets==16.0
+aiokafka==0.13.0
+asyncio==4.0.0
+orjson==3.11.8
+pandas==3.0.2
+pydantic==2.13.2
+pydantic_settings==2.13.1
+SQLAlchemy==2.0.49
+psycopg[binary]
+ccxt==4.5.51
+redis==7.4.0
+fastapi==0.135.3
+uvicorn==0.44.0

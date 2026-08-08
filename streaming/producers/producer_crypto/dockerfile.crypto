@@ -1,0 +1,20 @@
+# Образ для разработки (development)
+FROM python:3.12-slim AS dev
+WORKDIR /app
+COPY ./requirements_crypto.txt .
+RUN pip install --no-cache-dir -r requirements_crypto.txt
+
+# Образ для Kubernetes (production)
+FROM python:3.12-slim AS prod
+
+WORKDIR /app
+
+COPY kafka/producers/producer_crypto/. ./
+
+RUN pip install -r requirements_crypto.txt
+
+COPY kafka/plugins/for_kafka.py ./plugins/
+COPY dwh/ ./dwh/
+COPY config/crypto/ ./crypto/
+
+CMD ["python", "producer_crypto.py"]
