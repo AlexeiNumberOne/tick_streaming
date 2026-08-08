@@ -7,3 +7,13 @@ pytest==9.1.1
 testcontainers==4.14.2
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
+
+websockets==16.0
+aiokafka==0.13.0
+asyncio==4.0.0
+orjson==3.11.8
+pydantic_settings==2.13.1
+SQLAlchemy==2.0.49
+redis==7.4.0
+fastapi==0.135.3
+uvicorn==0.44.0
