@@ -29,11 +29,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install Docker client
-        run: apk add docker-cli
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
       - name: Run Integration tests
         run: pytest -m integration
-        env:
-          DOCKER_HOST: unix:///var/run/docker.sock
