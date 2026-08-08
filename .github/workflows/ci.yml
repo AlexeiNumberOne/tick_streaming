@@ -1,6 +1,10 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   unit-tests:
@@ -14,3 +18,18 @@ jobs:
         - run: pip install -r requirements-dev.txt
         - name: Run Unit tests only
           run: pytest -m unit
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    # Запуск только при событии pull_request
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run Integration tests
+        run: pytest -m integration
