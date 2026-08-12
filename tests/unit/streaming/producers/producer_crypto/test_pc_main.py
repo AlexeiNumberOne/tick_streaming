@@ -6,7 +6,9 @@ from streaming.producers.producer_crypto.main import main
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_main():
-    with patch("streaming.producers.producer_crypto.main.READY_EXCHANGES", ["binance"]):
+    with patch(
+        "streaming.producers.producer_crypto.exchanges.SUPPORTED_EXCHANGES", ["binance"]
+    ):
         with patch(
             "streaming.producers.producer_crypto.main.run_server",
             new_callable=AsyncMock,

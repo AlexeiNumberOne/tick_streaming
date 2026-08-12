@@ -1,5 +1,38 @@
-READY_WEBSOCKETS = {}  # Словарь с готовыми websocket соединениями
-READY_EXCHANGES = ["binance"]  # Доступные биржи для подписки (готовые классы)
+from streaming.producers.producer_crypto.ws import WSConnectionManager
 
-QUEUE_SIZE = 10000  # Размер кеша для дедупликации
-STATS_INTERVAL = 60  # Интервал вывода статистики
+
+class ExchangeInfo:
+    """Информация о готовности биржи
+    и её ws-соединениях
+    """
+
+    def __init__(self, exchange: str, market_type: str, expected_ws: int):
+        self.exchange = exchange
+        self.market_type = market_type
+        self.expected_ws = expected_ws
+        self.ws: list[WSConnectionManager] = []
+        self.log_count_deliveries = 0
+        self.log_count_in_buffer = 0
+        self.log_count_errors = 0
+        self.log_count_received_ticks = 0
+
+    def add_manager(self, manager: WSConnectionManager):
+        self.ws.append(manager)
+
+    @property
+    def is_ready(self) -> bool:
+        if not self.ws:
+            return False
+        count = 0
+        for ws in self.ws:
+            if ws.info.health is False:
+                return False
+            count += 1
+
+        if count != self.expected_ws:
+            return False
+
+        return True
+
+
+exchange_state: dict[str, ExchangeInfo] = {}

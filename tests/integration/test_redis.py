@@ -12,14 +12,17 @@ async def test_redis_lua_scripts(redis_container):
     host = redis_container.get_container_host_ip()
     port = redis_container.get_exposed_port(6379)
 
-    client = aioredis.Redis(host=host, port=port, decode_responses=True, protocol=3)
+    async_client = aioredis.Redis(
+        host=host, port=port, decode_responses=True, protocol=3
+    )
+    # sync_client = redis.Redis(host, port, decode_responses=True)
 
     add_attempt = get_registered_lua_script(
-        redis_client=client,
+        redis_client=async_client,
         script_path=Path("streaming/plugins/lua/add_attempt_create_connect.lua"),
     )
     add_connection = get_registered_lua_script(
-        redis_client=client,
+        redis_client=async_client,
         script_path=Path("streaming/plugins/lua/add_active_connection.lua"),
     )
 

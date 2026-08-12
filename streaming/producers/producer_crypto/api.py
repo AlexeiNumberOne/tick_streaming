@@ -2,7 +2,7 @@ import uvicorn
 
 from fastapi import FastAPI
 
-from streaming.producers.producer_crypto.state import READY_WEBSOCKETS
+from streaming.producers.producer_crypto.state import exchange_state
 
 app = FastAPI()
 
@@ -10,12 +10,11 @@ app = FastAPI()
 def is_ready() -> bool:
     """Возвращает True, если все websocket подключения были установлены"""
 
-    if not isinstance(READY_WEBSOCKETS, dict):
-        raise ValueError(
-            f"Неверный тип данных для READY_WEBSOCKETS: {type(READY_WEBSOCKETS)}: {READY_WEBSOCKETS}. Ожидается dict"
-        )
+    for values in exchange_state.values():
+        if not values.is_ready:
+            return False
 
-    return bool(READY_WEBSOCKETS) and all(READY_WEBSOCKETS.values())
+    return True
 
 
 @app.get("/ready")

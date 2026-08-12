@@ -4,3 +4,5 @@ from .binance import Binance
 # from .kraken import Kraken
 
 __all__ = ["Binance"]
+
+SUPPORTED_EXCHANGES = ["binance"]
