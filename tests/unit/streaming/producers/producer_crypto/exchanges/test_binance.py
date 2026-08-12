@@ -11,10 +11,8 @@ correct_kwargs = {
     "source_name": "binance",
     "pairs": ["BTCUSDT", "ETHUSDT"],
     "producer": MOCK_PRODUCER,
-    "topic": "binance",
     "add_attempt_script": MOCK_ADD_ATTEMPT_SCRIPT,
     "add_connection_script": MOCK_ADD_CONNECTION_SCRIPT,
-    "ready_websockets": {},
 }
 
 
@@ -32,10 +30,8 @@ def test_binance_constructor_type_market_binance():
             source_name="binance",
             pairs=["BTCUSDT", "ETHUSDT"],
             producer=MOCK_PRODUCER,
-            topic="binance",
             add_attempt_script=MOCK_ADD_ATTEMPT_SCRIPT,
             add_connection_script=MOCK_ADD_CONNECTION_SCRIPT,
-            ready_websockets={},
         )
         assert stream.market_type == market
         assert stream.ws_url == ref
@@ -51,43 +47,30 @@ def test_binance_constructor_wrong_type_market_binance():
             source_name="binance",
             pairs=["BTCUSDT", "ETHUSDT"],
             producer=MOCK_PRODUCER,
-            topic="binance",
             add_attempt_script=MOCK_ADD_ATTEMPT_SCRIPT,
             add_connection_script=MOCK_ADD_CONNECTION_SCRIPT,
-            ready_websockets={},
         )
         stream
 
 
 @pytest.mark.unit
-def test_build_sub_messages():
+def test_create_batches_pairs_and_build_sub_messages():
     stream = Binance(**correct_kwargs)
-    result = stream.build_sub_messages()
-    excepted = [
-        {"method": "SUBSCRIBE", "params": ["btcusdt@trade", "ethusdt@trade"], "id": 1}
-    ]
-    assert result == excepted
+    stream.LIMIT_SUB = 1
+    batches = stream.create_batches_pairs(stream.pairs)
 
+    assert batches == [["BTCUSDT"], ["ETHUSDT"]]
 
-@pytest.mark.unit
-def test_build_sub_messages_when_sub_limit_one():
-    stream = Binance(**correct_kwargs)
-    stream.limit_sub = 1
-    result = stream.build_sub_messages()
+    result = []
+    for batch in batches:
+        result.append(stream.build_sub_messages(batch))
+
     excepted = [
         {"method": "SUBSCRIBE", "params": ["btcusdt@trade"], "id": 1},
         {"method": "SUBSCRIBE", "params": ["ethusdt@trade"], "id": 1},
     ]
 
     assert result == excepted
-
-
-@pytest.mark.unit
-def test_build_sub_messages_empty_pairs():
-    stream = Binance(**correct_kwargs)
-    stream.pairs = []
-    with pytest.raises(ValueError, match="Пришёл пустой список валютный пар"):
-        stream.build_sub_messages()
 
 
 @pytest.mark.unit

@@ -1,237 +1,103 @@
 import pytest
-
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch
 
 from streaming.producers.producer_crypto.base import MarketStream
-# from streaming.producers.producer_crypto.exchanges.binance import Binance
-
-MOCK_PRODUCER = MagicMock()
-MOCK_ADD_ATTEMPT_SCRIPT = MagicMock()
-MOCK_ADD_CONNECTION_SCRIPT = MagicMock()
-
-correct_kwargs = {
-    "market_type": "spot",
-    "source_name": "binance",
-    "pairs": ["BTCUSDT", "ETHUSDT"],
-    "producer": MOCK_PRODUCER,
-    "topic": "binance",
-    "add_attempt_script": MOCK_ADD_ATTEMPT_SCRIPT,
-    "add_connection_script": MOCK_ADD_CONNECTION_SCRIPT,
-    "ready_websockets": {},
-}
+from streaming.producers.producer_crypto.state import exchange_state
 
 
-class mock_subclass(MarketStream):
-    def __init__(
-        self,
-        source_name,
-        market_type,
-        pairs,
-        topic,
-        producer,
-        add_attempt_script,
-        add_connection_script,
-        ready_websockets,
-    ):
-        super().__init__(
-            source_name=source_name,
-            market_type=market_type,
-            topic=topic,
-            producer=producer,
-            add_attempt_script=add_attempt_script,
-            add_connection_script=add_connection_script,
-            ws_url="",
-            limit_connections=10,
-            limit_attempt=10,
-            ttl_attempt=10,
-            ready_websockets=ready_websockets,
+# Тестовый подкласс с реализацией абстрактных методов
+class TestMarketStream(MarketStream):
+    __test__ = False  # чтобы pytest не пытался собирать его как тест
+
+    def process_message(self, raw: dict):
+        pass
+
+    def build_sub_messages(self, batch):
+        return {"method": "SUBSCRIBE", "params": batch}
+
+    def create_batches_pairs(self, pairs):
+        return [pairs[i : i + 2] for i in range(0, len(pairs), 2)]
+
+
+@pytest.fixture
+def stream_instance():
+    obj = TestMarketStream(
+        source_name="test_exchange",
+        market_type="spot",
+        pairs=["BTCUSDT", "ETHUSDT", "BNBUSDT"],
+        producer=AsyncMock(),
+        add_attempt_script=AsyncMock(),
+        add_connection_script=AsyncMock(),
+        ws_url="ws://test",
+        limit_connections=10,
+        limit_attempt=5,
+        ttl_attempt=60,
+        queue_size=1000,
+        filter_ping_pong=None,
+        ping_interval=20,
+    )
+    return obj
+
+
+@pytest.mark.asyncio
+async def test_run_creates_components_and_starts_tasks(stream_instance):
+    exchange_state.clear()
+    stream_instance.create_batches_pairs = MagicMock(
+        return_value=[["BTCUSDT"], ["ETHUSDT", "BNBUSDT"]]
+    )
+
+    with patch(
+        "streaming.producers.producer_crypto.base.KafkaWriter"
+    ) as MockKafkaWriter, patch(
+        "streaming.producers.producer_crypto.base.RateLimiter"
+    ) as MockRateLimiter, patch(
+        "streaming.producers.producer_crypto.base.WSConnectionHandler"
+    ) as MockWSHandler:
+        mock_writer_instance = AsyncMock()
+        MockKafkaWriter.return_value = mock_writer_instance
+
+        mock_limiter_instance = AsyncMock()
+        mock_limiter_instance.access = AsyncMock(return_value=True)
+        MockRateLimiter.return_value = mock_limiter_instance
+
+        mock_handler_instance = AsyncMock()
+        mock_handler_instance.run = AsyncMock(return_value=None)
+        MockWSHandler.return_value = mock_handler_instance
+
+        await stream_instance.run()
+
+        stream_instance.create_batches_pairs.assert_called_once_with(
+            stream_instance.pairs
         )
 
-    def process_message():
-        pass
+        key = f"{stream_instance.source_name}-{stream_instance.market_type}"
+        assert key in exchange_state
+        exchange_info = exchange_state[key]
+        assert exchange_info.exchange == stream_instance.source_name
+        assert exchange_info.market_type == stream_instance.market_type
+        assert exchange_info.expected_ws == 2
 
-    def build_sub_messages():
-        pass
+        MockKafkaWriter.assert_called_once_with(
+            queue=stream_instance.queue,
+            producer=stream_instance.producer,
+            exchange_info=exchange_info,
+        )
 
+        MockRateLimiter.assert_called_once_with(
+            main_key=stream_instance.source_name,
+            attempt_script=stream_instance.add_attempt_script,
+            connection_script=stream_instance.add_connection_script,
+            limit_attempt=stream_instance.limit_attempt,
+            limit_connections=stream_instance.limit_connections,
+            ttl_attempt=stream_instance.ttl_attempt,
+        )
 
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_reader_creates_tasks_and_excpected():
-    stream = mock_subclass(**correct_kwargs)
-
-    for mock_messages in [[{}, {}], [{}]]:
-        stream.build_sub_messages = MagicMock(return_value=mock_messages)
-
-        mock_task = AsyncMock()
-        stream._create_connection = AsyncMock(return_value=mock_task)
-
-        await stream._reader()
-        stream.build_sub_messages.assert_called_once()
-        assert stream._create_connection.call_count == len(mock_messages)
-        assert stream.stats_init_websockets["expected"] == len(mock_messages)
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_request_to_redis_attempt_True_connection_True():
-    stream = mock_subclass(**correct_kwargs)
-    stream.add_attempt_script = AsyncMock(return_value=True)
-    stream.add_connection_script = AsyncMock(return_value=True)
-
-    result = await stream._request_to_redis()
-    assert result is True
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_request_to_redis_attempt_5_attempt_True_connection_True():
-    stream = mock_subclass(**correct_kwargs)
-    stream.add_attempt_script = AsyncMock(side_effect=[5, True])
-    stream.add_connection_script = AsyncMock(return_value=True)
-    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        result = await stream._request_to_redis()
-        mock_sleep.assert_awaited_once_with(5 + 3)
-        assert result is True
-        assert stream.add_attempt_script.call_count == 2
-        assert stream.add_connection_script.call_count == 1
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_request_to_redis_connection_False():
-    stream = mock_subclass(**correct_kwargs)
-    stream.add_attempt_script = AsyncMock(return_value=True)
-    stream.add_connection_script = AsyncMock(return_value=False)
-    result = await stream._request_to_redis()
-    assert result is False
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_request_to_redis_wrong_attempt():
-    stream = mock_subclass(**correct_kwargs)
-    with pytest.raises(ValueError, match="Неожиданный ответ от lua скрипта!"):
-        stream.add_attempt_script = AsyncMock(return_value=None)
-        await stream._request_to_redis()
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_request_to_redis_wrong_connection():
-    stream = mock_subclass(**correct_kwargs)
-    stream.add_attempt_script = AsyncMock(return_value=True)
-    with pytest.raises(ValueError, match="Неожиданный ответ от lua скрипта!"):
-        stream.add_connection_script = AsyncMock(return_value=None)
-        await stream._request_to_redis()
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_request_to_redis_timeout():
-    stream = mock_subclass(**correct_kwargs)
-    stream.add_attempt_script = AsyncMock(return_value=5)
-    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        mock_loop = MagicMock()
-        mock_loop.time.return_value = 10
-        with patch("asyncio.get_event_loop", return_value=mock_loop):
-            with pytest.raises(
-                TimeoutError, match="Таймаут ожидания слота для соединения"
-            ):
-                await stream._request_to_redis(timeout=0)
-                mock_sleep.assert_not_awaited()
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_check_access_exception_TimeoutError():
-    stream = mock_subclass(**correct_kwargs)
-    stream._request_to_redis = AsyncMock(side_effect=TimeoutError("test timeout"))
-    result = await stream._check_access()
-    assert result is False
-
-    expected = {"active": 0, "rejected": 0, "timeout": 1, "expected": -1}
-    assert stream.stats_init_websockets == expected
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_check_access_raise_ValueError():
-    stream = mock_subclass(**correct_kwargs)
-    stream._request_to_redis = AsyncMock(return_value=None)
-    with pytest.raises(
-        ValueError, match="Пришёл неверный тип данных от _request_to_redis:"
-    ):
-        await stream._check_access()
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_check_access_if_result_False():
-    stream = mock_subclass(**correct_kwargs)
-    stream._request_to_redis = AsyncMock(return_value=False)
-
-    result = await stream._check_access()
-    assert result is False
-
-    expected = {"active": 0, "rejected": 1, "timeout": 0, "expected": -1}
-
-    assert stream.stats_init_websockets == expected
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_check_access_if_result_True():
-    stream = mock_subclass(**correct_kwargs)
-    stream._request_to_redis = AsyncMock(return_value=True)
-
-    result = await stream._check_access()
-    assert result is True
-
-    expected = {"active": 1, "rejected": 0, "timeout": 0, "expected": -1}
-
-    assert stream.stats_init_websockets == expected
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_check_access_if_result_true_and_ready_websockets_True():
-    stream = mock_subclass(**correct_kwargs)
-    stream._request_to_redis = AsyncMock(return_value=True)
-
-    stream.ready_websockets["binance-spot"] = False
-    stream.stats_init_websockets = {
-        "active": 0,
-        "rejected": 0,
-        "timeout": 0,
-        "expected": 1,
-    }
-
-    result = await stream._check_access()
-    assert result is True
-
-    expected = {"active": 1, "rejected": 0, "timeout": 0, "expected": 0}
-
-    assert stream.stats_init_websockets == expected
-    assert stream.ready_websockets["binance-spot"] is True
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_create_connection_result_ValueError():
-    stream = mock_subclass(**correct_kwargs)
-    stream._request_to_redis = AsyncMock(return_value=None)
-    with pytest.raises(
-        ValueError, match="Пришёл неверный тип данных от _request_to_redis:"
-    ):
-        await stream._create_connection()
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_create_connection_result_False():
-    stream = mock_subclass(**correct_kwargs)
-    stream._check_access = AsyncMock(return_value=False)
-
-    result = await stream._create_connection()
-
-    assert result is None
+        calls = MockWSHandler.call_args_list
+        assert len(calls) == 2
+        _, kwargs1 = calls[0]
+        assert kwargs1["batch"] == ["BTCUSDT"]
+        assert kwargs1["limiter"] == mock_limiter_instance
+        assert kwargs1["ws_url"] == stream_instance.ws_url
+        _, kwargs2 = calls[1]
+        assert kwargs2["batch"] == ["ETHUSDT", "BNBUSDT"]
+        assert kwargs2["limiter"] == mock_limiter_instance

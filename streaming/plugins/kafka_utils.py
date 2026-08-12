@@ -2,10 +2,13 @@ import asyncio
 import time
 import orjson
 import os
+import logging
 
 from aiokafka import AIOKafkaProducer
 from aiokafka.admin import AIOKafkaAdminClient, NewTopic
 from aiokafka.errors import TopicAlreadyExistsError
+
+from streaming.producers.producer_crypto.state import ExchangeInfo
 
 
 def get_bootstrap_servers(bootstrap_servers: str = None) -> str | list[str]:
@@ -129,3 +132,41 @@ def create_producer(bootstrap_servers: str | list[str]) -> AIOKafkaProducer:
         max_batch_size=1048576,  # 1 МБ
         compression_type="gzip",
     )
+
+
+class KafkaWriter:
+    def __init__(
+        self,
+        queue: asyncio.Queue,
+        producer: AIOKafkaProducer,
+        exchange_info: ExchangeInfo,
+    ):
+        self.queue = queue
+        self.producer = producer
+        self.exchange_info = exchange_info
+
+    def _on_send_done(self, task):
+        try:
+            task.result()
+            self.exchange_info.log_count_deliveries += 1
+        except Exception as e:
+            print(f"Ошибка при отправке: {e}")
+            self.exchange_info.log_count_errors += 1
+
+    async def _send_message(self, msg):
+        return await self.producer.send(self.exchange_info.exchange, value=msg)
+
+    async def run(self):
+        while True:
+            try:
+                msg = await self.queue.get()
+                task = asyncio.create_task(self._send_message(msg))
+                task.add_done_callback(self._on_send_done)
+                self.exchange_info.log_count_in_buffer += 1
+                await asyncio.sleep(0)
+            except Exception as e:
+                logging.error(
+                    f"{self.exchange_info.exchange} Ошибка при буфферизации: {e}",
+                    flush=True,
+                )
+                self.exchange_info.log_count_errors += 1

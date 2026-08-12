@@ -8,28 +8,25 @@ from streaming.producers.producer_crypto.base import MarketStream
 
 logger = logging.getLogger(__name__)
 
-SUB_MSG = {"method": "SUBSCRIBE", "params": [], "id": 1}
-LIMIT_SUB = 200
-LIMIT_CONNECTION = 1024
-LIMIT_ATTEMPT = 300
-TTL_ATTEMPT = 300
-
 
 class Binance(MarketStream):
+    SUB_MSG = {"method": "SUBSCRIBE", "params": [], "id": 1}
+    LIMIT_SUB = 200
+    LIMIT_CONNECTION = 1024
+    LIMIT_ATTEMPT = 300
+    TTL_ATTEMPT = 300
+    UNSUB_MSG = {"method": "UNSUBSCRIBE", "params": [], "id": 9999}
+    QUEUE_SIZE = 10_000
+
     def __init__(
         self,
         source_name: str,
         market_type: str,
         pairs: list,
-        topic: str,
         producer: AIOKafkaProducer,
         add_attempt_script: AsyncScript,
         add_connection_script: AsyncScript,
-        ready_websockets: dict,
     ):
-        self.pairs = pairs
-        self.limit_sub = LIMIT_SUB
-
         if market_type == "spot":
             ws_url = "wss://stream.binance.com:9443/ws"
         elif market_type == "swap":
@@ -42,34 +39,29 @@ class Binance(MarketStream):
         super().__init__(
             source_name=source_name,
             market_type=market_type,
-            topic=topic,
+            pairs=pairs,
             producer=producer,
             add_attempt_script=add_attempt_script,
             add_connection_script=add_connection_script,
             ws_url=ws_url,
-            limit_connections=LIMIT_CONNECTION,
-            limit_attempt=LIMIT_ATTEMPT,
-            ttl_attempt=TTL_ATTEMPT,
-            ready_websockets=ready_websockets,
+            limit_connections=self.LIMIT_CONNECTION,
+            limit_attempt=self.LIMIT_ATTEMPT,
+            ttl_attempt=self.TTL_ATTEMPT,
+            queue_size=self.QUEUE_SIZE,
         )
 
-    def build_sub_messages(self) -> list:
-        """Возвращает список сообщений для подписки"""
-        if not self.pairs:
-            raise ValueError("Пришёл пустой список валютный пар")
-
-        messages = []
+    def create_batches_pairs(self, pairs: list) -> list[list]:
         batches = [
-            self.pairs[i : i + self.limit_sub]
-            for i in range(0, len(self.pairs), self.limit_sub)
+            pairs[i : i + self.LIMIT_SUB] for i in range(0, len(pairs), self.LIMIT_SUB)
         ]
+        return batches
 
-        for batch in batches:
-            msg = SUB_MSG.copy()
-            msg["params"] = [item.lower() + "@trade" for item in batch]
-            messages.append(msg)
+    def build_sub_messages(self, batch: list) -> dict:
+        """Возвращает сообщение для подписки"""
+        msg = self.SUB_MSG.copy()
+        msg["params"] = [item.lower() + "@trade" for item in batch]
 
-        return messages
+        return msg
 
     def process_message(self, raw: dict) -> Iterator[dict]:
         try:
@@ -86,12 +78,12 @@ class Binance(MarketStream):
                 "side": "sell" if raw["m"] else "buy",
             }
         except KeyError as e:
-            logging.error(
+            logger.error(
                 f"[{self.source_name} - {self.market_type}] Ошибка парсинга сообщения: отсутствует поле {e}."
             )
             return ()
         except ValueError as e:
-            logging.error(
+            logger.error(
                 f"[{self.source_name} - {self.market_type}] Ошибка парсинга сообщения: неверный тип данных {e}."
             )
             return ()

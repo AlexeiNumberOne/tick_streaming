@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 
 from unittest.mock import AsyncMock, MagicMock, patch
 from aiokafka.errors import TopicAlreadyExistsError
@@ -9,7 +10,10 @@ from streaming.plugins.kafka_utils import (
     exists_topic,
     create_topic,
     create_producer,
+    KafkaWriter,
 )
+
+from streaming.producers.producer_crypto.state import ExchangeInfo
 
 
 @pytest.mark.unit
@@ -226,3 +230,84 @@ async def test_exists_topic_error():
         with pytest.raises(Exception, match="Kafka error"):
             await exists_topic("topic", "localhost:9092")
         mock_admin.close.assert_awaited_once()
+
+
+@pytest.fixture
+def exchange_info():
+    return ExchangeInfo(exchange="test_exchange", market_type="spot", expected_ws=1)
+
+
+@pytest.fixture
+def kafka_writer(exchange_info):
+    queue = asyncio.Queue()
+    producer = AsyncMock()
+    writer = KafkaWriter(queue=queue, producer=producer, exchange_info=exchange_info)
+
+    return writer
+
+
+@pytest.mark.unit
+def test_on_send_done_success(kafka_writer):
+    task = MagicMock()
+    task.result.return_value = "ok"
+    kafka_writer._on_send_done(task)
+    assert kafka_writer.exchange_info.log_count_deliveries == 1
+    assert kafka_writer.exchange_info.log_count_errors == 0
+
+
+@pytest.mark.unit
+def test_on_send_done_error(kafka_writer, capsys):
+    task = MagicMock()
+    task.result.side_effect = Exception("Kafka error")
+    kafka_writer._on_send_done(task)
+    assert kafka_writer.exchange_info.log_count_deliveries == 0
+    assert kafka_writer.exchange_info.log_count_errors == 1
+    captured = capsys.readouterr()
+    assert "Ошибка при отправке: Kafka error" in captured.out
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_send_message(kafka_writer):
+    msg = {"price": 100}
+    expected_result = "metadata"
+    kafka_writer.producer.send = AsyncMock(return_value=expected_result)
+
+    result = await kafka_writer._send_message(msg)
+
+    kafka_writer.producer.send.assert_called_once_with(
+        kafka_writer.exchange_info.exchange, value=msg
+    )
+    assert result == expected_result
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_run_success(kafka_writer):
+    # Помещаем сообщения в очередь
+    messages = [{"price": 100}, {"price": 200}, {"price": 300}]
+    for msg in messages:
+        await kafka_writer.queue.put(msg)
+
+    kafka_writer.producer.send = AsyncMock(return_value="ok")
+
+    task = asyncio.create_task(kafka_writer.run())
+
+    while not kafka_writer.queue.empty():
+        await asyncio.sleep(0.01)
+
+    await asyncio.sleep(0.1)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert kafka_writer.producer.send.call_count == len(messages)
+    for msg in messages:
+        kafka_writer.producer.send.assert_any_call(
+            kafka_writer.exchange_info.exchange, value=msg
+        )
+
+    assert kafka_writer.exchange_info.log_count_in_buffer == len(messages)
+    assert kafka_writer.exchange_info.log_count_deliveries == len(messages)
+    assert kafka_writer.exchange_info.log_count_errors == 0

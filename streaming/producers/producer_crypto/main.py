@@ -1,25 +1,51 @@
 import asyncio
 import logging
+import signal
 
 from pathlib import Path
 
 from streaming.producers.producer_crypto import exchanges
-from streaming.producers.producer_crypto.state import READY_EXCHANGES, READY_WEBSOCKETS
+from streaming.producers.producer_crypto.state import exchange_state
+from streaming.producers.producer_crypto.exchanges import SUPPORTED_EXCHANGES
 from streaming.producers.producer_crypto.api import run_server
 from streaming.plugins import kafka_utils
 from dwh.engines.engine_pg import get_sync_pg_engine
-from streaming.plugins.redis_client import init_redis_client, get_registered_lua_script
+from streaming.plugins.redis_client import (
+    init_async_redis_client,
+    init_sync_redis_client,
+    get_registered_lua_script,
+    delete_connections,
+)
 from config.crypto.loader_sources import load_config_sources
 from dwh.queries.core.dql import select_pairs
 
 logger = logging.getLogger(__name__)
+
+sync_pg_engine = get_sync_pg_engine()
+
+
+def shutdown(signum, frame):
+    logging.warning(f"Принят сигнал {signum} в  {frame}")
+    # if check_planned() == 1:
+    #     #🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️
+    #     loss_time = time.time()
+    #     for exchange in exchange_state.values():
+    #         for ws in exchange.ws:
+    #             #sync_save_in_db(ws.info.pairs, loss_time)
+    #             ...
+    redis_client = init_sync_redis_client()
+    delete_connections(exchange_state, redis_client)
+    logging.warning("Все коннекты закрыты. Выход...")
+
+
+signal.signal(signal.SIGTERM, shutdown)
 
 
 async def main():
     server_task = asyncio.create_task(run_server())
 
     try:
-        ready_exchanges = load_config_sources(valid_exchanges=READY_EXCHANGES)
+        ready_exchanges = load_config_sources(valid_exchanges=SUPPORTED_EXCHANGES)
 
         if not isinstance(ready_exchanges, list):
             raise TypeError(
@@ -29,12 +55,11 @@ async def main():
             raise ValueError("Пришёл пустой список exchanges")
 
         STREAM_CLASSES = {
-            name: getattr(exchanges, name.capitalize()) for name in READY_EXCHANGES
+            name: getattr(exchanges, name.capitalize()) for name in SUPPORTED_EXCHANGES
         }
 
         bootstrap_servers = kafka_utils.get_bootstrap_servers()
-        sync_pg_engine = get_sync_pg_engine()
-        redis_client = init_redis_client()
+        redis_client = init_async_redis_client()
 
         add_connection_script = get_registered_lua_script(
             redis_client=redis_client,
@@ -65,11 +90,9 @@ async def main():
                     source_name=name_exchange,
                     market_type=type_market,
                     pairs=pairs,
-                    topic=name_exchange,
                     producer=producer,
                     add_attempt_script=add_attempt_script,
                     add_connection_script=add_connection_script,
-                    ready_websockets=READY_WEBSOCKETS,
                 )
 
                 streams.append(stream)
