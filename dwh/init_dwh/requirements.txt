@@ -5,3 +5,4 @@ ccxt==4.5.51
 psycopg[binary]==3.3.3
 clickhouse-sqlalchemy==0.3.2
 clickhouse-driver==0.2.10
+asyncpg==0.31.0
