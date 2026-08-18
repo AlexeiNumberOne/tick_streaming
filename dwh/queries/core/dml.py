@@ -1,12 +1,14 @@
 import logging
 
-from sqlalchemy import insert, Engine, Table
+from sqlalchemy import Connection, insert, Table
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 logger = logging.getLogger(__name__)
 
 
-def insert_info_pairs(table: Table, data: list, sync_pg_engine: Engine) -> None:
-    with sync_pg_engine.connect() as conn:
-        stmt = insert(table).values(data)
-        conn.execute(stmt)
-        conn.commit()
+def insert_in_table(
+    conn: Connection | AsyncConnection, table=Table, values=list
+) -> None:
+    stmt = insert(table).values(values)
+    conn.execute(stmt)
+    conn.commit()

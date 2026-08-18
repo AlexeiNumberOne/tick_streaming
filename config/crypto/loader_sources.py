@@ -82,7 +82,4 @@ def load_config_sources(
                 {"name_exchange": exchange.name, "type_markets": enabled_markets}
             )
 
-    if not result:
-        raise "Ни для одной биржи не были указаны желаемые типы рынка"
-
     return result

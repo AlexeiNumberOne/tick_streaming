@@ -1,23 +1,32 @@
 import pytest
 
-from streaming.plugins.kafka_utils import create_topic, exists_topic, create_producer
+from streaming.plugins.kafka_utils import KafkaManager
+
+from aiokafka.admin import AIOKafkaAdminClient
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_kafka(kafka_container):
     bootstrap = kafka_container.get_bootstrap_server()
-    assert bootstrap is not None
 
-    topic = "test-topic"
+    topics = ["test-topic"]
 
-    await create_topic(topic_name=topic, bootstrap_servers=bootstrap)
+    kafka_manager = KafkaManager(bootstrap_servers=bootstrap)
 
-    assert await exists_topic(topic, bootstrap) is True
+    await kafka_manager.wait_kafka()
 
-    producer = create_producer(bootstrap)
+    await kafka_manager.exists_topics(topics=topics)
 
-    await producer.start()
-    await producer.send(topic, value={"test": "message"})
-    await producer.flush()
-    await producer.stop()
+    test_client = AIOKafkaAdminClient(bootstrap_servers=bootstrap, client_id="test")
+    await test_client.start()
+    current_topics = await test_client.list_topics()
+
+    assert current_topics == topics
+
+    kafka_manager.create_producer()
+
+    await kafka_manager.producer.start()
+    await kafka_manager.producer.send(topics[0], value={"test": "message"})
+    await kafka_manager.producer.flush()
+    await kafka_manager.producer.stop()

@@ -1,14 +1,15 @@
 import asyncio
 
-from redis.commands.core import AsyncScript
 from abc import ABC, abstractmethod
 from aiokafka import AIOKafkaProducer
 from typing import Iterator
 
 from streaming.producers.producer_crypto.state import exchange_state, ExchangeInfo
-from streaming.plugins.redis_client import RateLimiter
+from streaming.plugins.redis_utils import RateLimiter
 from streaming.producers.producer_crypto.ws import WSConnectionHandler
 from streaming.plugins.kafka_utils import KafkaWriter
+from streaming.plugins.redis_utils import RedisManager
+from dwh.postgres_utils import PostgresManager
 
 
 class MarketStream(ABC):
@@ -18,8 +19,8 @@ class MarketStream(ABC):
         market_type: str,
         pairs: list,
         producer: AIOKafkaProducer,
-        add_attempt_script: AsyncScript,
-        add_connection_script: AsyncScript,
+        redis_manager: RedisManager,
+        async_pg_manager: PostgresManager,
         ws_url: str,
         limit_connections: int,
         limit_attempt: int,
@@ -32,8 +33,8 @@ class MarketStream(ABC):
         self.market_type = market_type
         self.pairs = pairs
         self.producer = producer
-        self.add_attempt_script = add_attempt_script
-        self.add_connection_script = add_connection_script
+        self.redis_manager = redis_manager
+        self.async_pg_manager = async_pg_manager
         self.ws_url = ws_url
         self.limit_connections = limit_connections
         self.limit_attempt = limit_attempt
@@ -79,9 +80,8 @@ class MarketStream(ABC):
         )
         asyncio.create_task(writer.run())
         limiter = RateLimiter(
+            manager=self.redis_manager,
             main_key=self.source_name,
-            attempt_script=self.add_attempt_script,
-            connection_script=self.add_connection_script,
             limit_attempt=self.limit_attempt,
             limit_connections=self.limit_connections,
             ttl_attempt=self.ttl_attempt,
@@ -90,6 +90,7 @@ class MarketStream(ABC):
         for batch in batches:
             reader = WSConnectionHandler(
                 limiter=limiter,
+                async_pg_manager=self.async_pg_manager,
                 ws_url=self.ws_url,
                 batch=batch,
                 exchange_state=exchange_state,
