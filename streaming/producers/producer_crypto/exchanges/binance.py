@@ -2,9 +2,10 @@ import logging
 
 from collections.abc import Iterator
 from aiokafka import AIOKafkaProducer
-from redis.commands.core import AsyncScript
 
 from streaming.producers.producer_crypto.base import MarketStream
+from streaming.plugins.redis_utils import RedisManager
+from dwh.postgres_utils import PostgresManager
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +25,8 @@ class Binance(MarketStream):
         market_type: str,
         pairs: list,
         producer: AIOKafkaProducer,
-        add_attempt_script: AsyncScript,
-        add_connection_script: AsyncScript,
+        redis_manager: RedisManager,
+        async_pg_manager: PostgresManager,
     ):
         if market_type == "spot":
             ws_url = "wss://stream.binance.com:9443/ws"
@@ -41,8 +42,8 @@ class Binance(MarketStream):
             market_type=market_type,
             pairs=pairs,
             producer=producer,
-            add_attempt_script=add_attempt_script,
-            add_connection_script=add_connection_script,
+            redis_manager=redis_manager,
+            async_pg_manager=async_pg_manager,
             ws_url=ws_url,
             limit_connections=self.LIMIT_CONNECTION,
             limit_attempt=self.LIMIT_ATTEMPT,

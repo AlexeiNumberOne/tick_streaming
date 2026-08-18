@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import signal
+import time
 
 from pathlib import Path
 
@@ -8,34 +9,56 @@ from streaming.producers.producer_crypto import exchanges
 from streaming.producers.producer_crypto.state import exchange_state
 from streaming.producers.producer_crypto.exchanges import SUPPORTED_EXCHANGES
 from streaming.producers.producer_crypto.api import run_server
-from streaming.plugins import kafka_utils
-from dwh.engines.engine_pg import get_sync_pg_engine
-from streaming.plugins.redis_client import (
-    init_async_redis_client,
-    init_sync_redis_client,
-    get_registered_lua_script,
-    delete_connections,
-)
+from streaming.plugins.kafka_utils import KafkaManager
+
+from streaming.plugins.redis_utils import RedisManager
+
+from datetime import datetime, timezone
+
 from config.crypto.loader_sources import load_config_sources
-from dwh.queries.core.dql import select_pairs
+
+from dwh.postgres_utils import PostgresManager
+from dwh.queries.core.dql import select_filtered_values
+from dwh.queries.core.dml import insert_in_table
+from dwh.models.models_pg import pairs, event_log
 
 logger = logging.getLogger(__name__)
 
-sync_pg_engine = get_sync_pg_engine()
+pg_manager = PostgresManager()
+pg_manager.register_models(pairs, event_log)
 
 
 def shutdown(signum, frame):
+    shutdown_time = datetime.fromtimestamp(int(time.time()), tz=timezone.utc)
     logging.warning(f"Принят сигнал {signum} в  {frame}")
-    # if check_planned() == 1:
-    #     #🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️
-    #     loss_time = time.time()
-    #     for exchange in exchange_state.values():
-    #         for ws in exchange.ws:
-    #             #sync_save_in_db(ws.info.pairs, loss_time)
-    #             ...
-    redis_client = init_sync_redis_client()
-    delete_connections(exchange_state, redis_client)
-    logging.warning("Все коннекты закрыты. Выход...")
+    redis_manager = RedisManager("sync")
+
+    data = []
+    event_type = "planned_shutdown"
+    if not redis_manager.planned_SIGTERM:
+        logger.warning(f"Незапланированный сигнал {signum}")
+        event_type = "emergency_shutdown"
+
+    for exchange in exchange_state.values():
+        for ws in exchange.ws:
+            for pair in ws.info.pairs:
+                data.append(
+                    {
+                        "exchange": exchange.exchange,
+                        "pair": pair,
+                        "event_type": event_type,
+                        "event_time": shutdown_time,
+                    }
+                )
+            # 🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️
+            # Отсылать сообщение об отписке
+
+    pg_manager.execute_sync(
+        insert_in_table, table=pg_manager.models["event_log"], values=data
+    )
+
+    redis_client = RedisManager("sync")
+    redis_client.delete_connections(exchange_state)
 
 
 signal.signal(signal.SIGTERM, shutdown)
@@ -47,57 +70,49 @@ async def main():
     try:
         ready_exchanges = load_config_sources(valid_exchanges=SUPPORTED_EXCHANGES)
 
-        if not isinstance(ready_exchanges, list):
-            raise TypeError(
-                f"Неверный тип для exchanges: {type(ready_exchanges)}. Ожидается list"
-            )
-        if not ready_exchanges:
-            raise ValueError("Пришёл пустой список exchanges")
-
         STREAM_CLASSES = {
             name: getattr(exchanges, name.capitalize()) for name in SUPPORTED_EXCHANGES
         }
 
-        bootstrap_servers = kafka_utils.get_bootstrap_servers()
-        redis_client = init_async_redis_client()
-
-        add_connection_script = get_registered_lua_script(
-            redis_client=redis_client,
-            script_path=Path("streaming/plugins/lua/add_active_connection.lua"),
-        )
-        add_attempt_script = get_registered_lua_script(
-            redis_client=redis_client,
-            script_path=Path("streaming/plugins/lua/add_attempt_create_connect.lua"),
+        redis_manager = RedisManager("async")
+        redis_manager.register_lua_script(
+            Path("streaming/plugins/lua/attempt_script.lua"),
+            Path("streaming/plugins/lua/connection_script.lua"),
         )
 
-        await kafka_utils.wait_kafka(bootstrap_servers)
+        kafka_manager = KafkaManager()
+        kafka_manager.create_producer()
 
-        producer = kafka_utils.create_producer(bootstrap_servers)
+        async_pg_manager = PostgresManager(use_async=True)
+        async_pg_manager.register_models(event_log)
 
         streams = []
-
+        required_topics = []
         for exchange in ready_exchanges:
             name_exchange = exchange["name_exchange"]
-
-            if not await kafka_utils.exists_topic(
-                topic_name=name_exchange, bootstrap_servers=bootstrap_servers
-            ):
-                await kafka_utils.create_topic(name_exchange, bootstrap_servers)
+            required_topics.append(name_exchange)
 
             for type_market in exchange["type_markets"]:
-                pairs = select_pairs(sync_pg_engine, name_exchange, type_market)
+                pairs = pg_manager.execute_sync(
+                    select_filtered_values,
+                    table=pg_manager.models["pairs"],
+                    select_columns=["symbol_exchange_websocket"],
+                    exchange=name_exchange,
+                    type_market=type_market,
+                )
                 stream = STREAM_CLASSES[name_exchange](
                     source_name=name_exchange,
                     market_type=type_market,
                     pairs=pairs,
-                    producer=producer,
-                    add_attempt_script=add_attempt_script,
-                    add_connection_script=add_connection_script,
+                    producer=kafka_manager.producer,
+                    redis_manager=redis_manager,
+                    async_pg_manager=async_pg_manager,
                 )
 
                 streams.append(stream)
 
-        await producer.start()
+        await kafka_manager.exists_topics(required_topics)
+        await kafka_manager.producer.start()
         await asyncio.gather(*(stream.run() for stream in streams))
 
     except Exception:

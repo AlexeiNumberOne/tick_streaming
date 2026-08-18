@@ -58,7 +58,7 @@ def main():
         data = rest_get_pairs(exchange["name_exchange"], exchange["type_markets"])
         if data:
             pg_manager.execute_sync(
-                insert_in_table, table=pg_manager.models["pairs"], data=data
+                insert_in_table, table=pg_manager.models["pairs"], values=data
             )
         else:
             logging.warning(f"Для {exchange} не были получены данные")

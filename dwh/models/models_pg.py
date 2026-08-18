@@ -26,6 +26,7 @@ def event_log(metadata_obj_pg=None):
         "event_log",
         metadata_obj_pg,
         Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("exchange", String),
         Column("pair", String),
         Column("event_type", String),
         Column("event_time", TIMESTAMP(timezone=True)),

@@ -5,7 +5,10 @@ import asyncio
 
 from dataclasses import dataclass
 
-from streaming.plugins.redis_client import RateLimiter
+from streaming.plugins.redis_utils import RateLimiter
+from dwh.postgres_utils import PostgresManager
+from dwh.queries.core.dml import insert_in_table
+from datetime import datetime, timezone
 
 
 @dataclass
@@ -24,8 +27,17 @@ class WSInfo:
 
 
 class WSConnectionManager:
-    def __init__(self, url: str, ping_interval=None, filter_ping_pong=None):
+    def __init__(
+        self,
+        url: str,
+        async_pg_manager: PostgresManager,
+        exchange_info,
+        ping_interval=None,
+        filter_ping_pong=None,
+    ):
         self._url = url
+        self.exchange_info = exchange_info
+        self.async_pg_manager = async_pg_manager
         self._ping_interval = ping_interval
         self.filter_ping_pong = filter_ping_pong
         self.info = WSInfo()
@@ -42,6 +54,23 @@ class WSConnectionManager:
         await self.info.ws.recv()
         self.info.started_at = int(time.time())
         self.info.health = True
+
+        connect_time = datetime.fromtimestamp(int(time.time()), tz=timezone.utc)
+        data = []
+        for pair in self.info.pairs:
+            data.append(
+                {
+                    "exchange": self.exchange_info.exchange,
+                    "pair": pair,
+                    "event_type": "connection",
+                    "event_time": connect_time,
+                }
+            )
+        await self.async_pg_manager.execute_async(
+            insert_in_table,
+            table=self.async_pg_manager.models["event_log"],
+            values=data,
+        )
 
     async def reconnect(self):
         if self.info.ws:
@@ -76,6 +105,7 @@ class WSConnectionHandler:
     def __init__(
         self,
         limiter: RateLimiter,
+        async_pg_manager: PostgresManager,
         ws_url: str,
         batch: list,
         exchange_state: dict,
@@ -87,6 +117,7 @@ class WSConnectionHandler:
         ping_interval: int | None = None,
     ):
         self.limiter = limiter
+        self.async_pg_manager = async_pg_manager
         self.ws_url = ws_url
         self.batch = batch
         self.exchange_state = exchange_state
@@ -103,6 +134,8 @@ class WSConnectionHandler:
             return
         manager = WSConnectionManager(
             url=self.ws_url,
+            exchange_info=self.exchange_info,
+            async_pg_manager=self.async_pg_manager,
             ping_interval=self.ping_interval,
             filter_ping_pong=self.filter_ping_pong,
         )
@@ -121,10 +154,28 @@ class WSConnectionHandler:
                 for msg in self.process_message_func(raw):
                     await self.queue.put(msg)
             except websockets.ConnectionClosed:
-                # #🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️
-                # loss_time = int(time.time())
-                # #await async_save_in_db(manager.info.pairs, loss_time)
+                shutdown_time = datetime.fromtimestamp(
+                    int(time.time()), tz=timezone.utc
+                )
                 manager.info.health = False
+                self.limiter.manager.r.decrby(
+                    name=f"{self.exchange_info.exchange}:connections", amount=1
+                )
+                data = []
+                for pair in manager.info.pairs:
+                    data.append(
+                        {
+                            "exchange": self.exchange_info.exchange,
+                            "pair": pair,
+                            "event_type": "emergency_shutdown",
+                            "event_time": shutdown_time,
+                        }
+                    )
+                await self.async_pg_manager.execute_async(
+                    insert_in_table,
+                    table=self.async_pg_manager.models["event_log"],
+                    values=data,
+                )
                 if not await self.limiter.access():
                     return
                 await manager.reconnect()
