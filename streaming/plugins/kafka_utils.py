@@ -61,7 +61,7 @@ class KafkaManager:
                     )
                 await asyncio.sleep(retry_interval)
 
-    async def exists_topics(self, topics):
+    async def exists_topics(self, topics: list = None):
         """Проверка существования топика в Kafka"""
         admin_client = AIOKafkaAdminClient(
             bootstrap_servers=self.bootstrap_servers, client_id="check_topic"
