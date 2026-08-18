@@ -31,7 +31,7 @@ pg_manager.register_models(pairs, event_log)
 def shutdown(signum, frame):
     shutdown_time = datetime.fromtimestamp(int(time.time()), tz=timezone.utc)
     logging.warning(f"Принят сигнал {signum} в  {frame}")
-    redis_manager = RedisManager("sync")
+    redis_manager = RedisManager(use_async=False)
 
     data = []
     event_type = "planned_shutdown"
@@ -57,8 +57,7 @@ def shutdown(signum, frame):
         insert_in_table, table=pg_manager.models["event_log"], values=data
     )
 
-    redis_client = RedisManager("sync")
-    redis_client.delete_connections(exchange_state)
+    redis_manager.delete_connections(exchange_state)
 
 
 signal.signal(signal.SIGTERM, shutdown)
@@ -74,7 +73,7 @@ async def main():
             name: getattr(exchanges, name.capitalize()) for name in SUPPORTED_EXCHANGES
         }
 
-        redis_manager = RedisManager("async")
+        redis_manager = RedisManager(use_async=True)
         redis_manager.register_lua_script(
             Path("streaming/plugins/lua/attempt_script.lua"),
             Path("streaming/plugins/lua/connection_script.lua"),
