@@ -17,15 +17,16 @@ from datetime import datetime, timezone
 
 from config.crypto.loader_sources import load_config_sources
 
-from dwh.postgres_utils import PostgresManager
+from dwh.dbms_utils import DBMSManager, PostgresSettings
 from dwh.queries.core.dql import select_filtered_values
 from dwh.queries.core.dml import insert_in_table
 from dwh.models.models_pg import pairs, event_log
 
 logger = logging.getLogger(__name__)
 
-pg_manager = PostgresManager()
-pg_manager.register_models(pairs, event_log)
+settings_pg = PostgresSettings()
+sync_pg_manager = DBMSManager(settings_pg)
+sync_pg_manager.register_models(pairs, event_log)
 
 
 def shutdown(signum, frame):
@@ -53,8 +54,8 @@ def shutdown(signum, frame):
             # 🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️🖍️
             # Отсылать сообщение об отписке
 
-    pg_manager.execute_sync(
-        insert_in_table, table=pg_manager.models["event_log"], values=data
+    sync_pg_manager.execute_sync(
+        insert_in_table, table=sync_pg_manager.models["event_log"], values=data
     )
 
     redis_manager.delete_connections(exchange_state)
@@ -82,7 +83,7 @@ async def main():
         kafka_manager = KafkaManager()
         kafka_manager.create_producer()
 
-        async_pg_manager = PostgresManager(use_async=True)
+        async_pg_manager = DBMSManager(settings_pg, use_async=True)
         async_pg_manager.register_models(event_log)
 
         streams = []
@@ -92,9 +93,9 @@ async def main():
             required_topics.append(name_exchange)
 
             for type_market in exchange["type_markets"]:
-                pairs = pg_manager.execute_sync(
+                pairs = sync_pg_manager.execute_sync(
                     select_filtered_values,
-                    table=pg_manager.models["pairs"],
+                    table=sync_pg_manager.models["pairs"],
                     select_columns=["symbol_exchange_websocket"],
                     exchange=name_exchange,
                     type_market=type_market,

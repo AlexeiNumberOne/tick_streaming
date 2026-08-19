@@ -1,7 +1,8 @@
 import ccxt
 import logging
 
-from dwh.postgres_utils import PostgresManager
+# from dwh.postgres_utils import PostgresManager
+from dwh.dbms_utils import DBMSManager, PostgresSettings
 from dwh.models.models_pg import pairs, event_log
 from dwh.queries.core.ddl import create_schemas, create_tables
 from dwh.queries.core.dml import insert_in_table
@@ -47,7 +48,8 @@ def rest_get_pairs(exchange: str, needed_types: list) -> list[dict]:
 
 
 def main():
-    pg_manager = PostgresManager()
+    pg_settings = PostgresSettings()
+    pg_manager = DBMSManager(pg_settings)
     pg_manager.register_models(pairs, event_log)
     pg_manager.execute_sync(create_schemas, "crypto")
     pg_manager.execute_sync(create_tables, pg_manager.metadata)

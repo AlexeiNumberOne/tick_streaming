@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 
 from streaming.plugins.redis_utils import RateLimiter
-from dwh.postgres_utils import PostgresManager
+from dwh.dbms_utils import DBMSManager
 from dwh.queries.core.dml import insert_in_table
 from datetime import datetime, timezone
 
@@ -30,7 +30,7 @@ class WSConnectionManager:
     def __init__(
         self,
         url: str,
-        async_pg_manager: PostgresManager,
+        async_pg_manager: DBMSManager,
         exchange_info,
         ping_interval=None,
         filter_ping_pong=None,
@@ -105,7 +105,7 @@ class WSConnectionHandler:
     def __init__(
         self,
         limiter: RateLimiter,
-        async_pg_manager: PostgresManager,
+        async_pg_manager: DBMSManager,
         ws_url: str,
         batch: list,
         exchange_state: dict,
