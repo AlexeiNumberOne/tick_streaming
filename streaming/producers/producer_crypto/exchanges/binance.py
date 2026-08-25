@@ -5,7 +5,7 @@ from aiokafka import AIOKafkaProducer
 
 from streaming.producers.producer_crypto.base import MarketStream
 from streaming.plugins.redis_utils import RedisManager
-from dwh.postgres_utils import PostgresManager
+from dwh.dbms_utils import DBMSManager
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class Binance(MarketStream):
         pairs: list,
         producer: AIOKafkaProducer,
         redis_manager: RedisManager,
-        async_pg_manager: PostgresManager,
+        async_pg_manager: DBMSManager,
     ):
         if market_type == "spot":
             ws_url = "wss://stream.binance.com:9443/ws"

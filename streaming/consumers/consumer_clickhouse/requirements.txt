@@ -1,0 +1,12 @@
+orjson==3.11.8
+aiokafka==0.13.0
+aiochclient==2.6.0
+aiohttp[speedups]==3.9.0
+redis==7.4.0
+fastapi==0.135.3
+uvicorn==0.44.0
+asynch==0.2.5
+clickhouse-sqlalchemy==0.3.2
+pydantic==2.13.2
+pydantic_settings==2.13.1
+SQLAlchemy==2.0.49
