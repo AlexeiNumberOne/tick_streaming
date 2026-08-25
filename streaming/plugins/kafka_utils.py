@@ -12,7 +12,6 @@ from aiokafka.errors import (
     KafkaConnectionError,
 )
 
-from streaming.producers.producer_crypto.state import ExchangeInfo
 
 logger = logging.getLogger(__name__)
 
@@ -138,22 +137,17 @@ class KafkaManager:
             )
 
         self.consumer = AIOKafkaConsumer(
-            self.topics,
+            *self.topics,
             bootstrap_servers=self.bootstrap_servers,
-            group_id="clickhouse-writer",
+            group_id="clickhouse-writer-test",
             value_deserializer=lambda v: orjson.loads(v),
-            auto_offset_reset="latest",  # earliest
+            auto_offset_reset="earliest",  # latest
             enable_auto_commit=False,
         )
 
 
 class KafkaWriter:
-    def __init__(
-        self,
-        queue: asyncio.Queue,
-        producer: AIOKafkaProducer,
-        exchange_info: ExchangeInfo,
-    ):
+    def __init__(self, queue: asyncio.Queue, producer: AIOKafkaProducer, exchange_info):
         self.queue = queue
         self.producer = producer
         self.exchange_info = exchange_info

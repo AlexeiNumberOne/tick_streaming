@@ -9,7 +9,7 @@ from streaming.plugins.redis_utils import RateLimiter
 from streaming.producers.producer_crypto.ws import WSConnectionHandler
 from streaming.plugins.kafka_utils import KafkaWriter
 from streaming.plugins.redis_utils import RedisManager
-from dwh.postgres_utils import PostgresManager
+from dwh.dbms_utils import DBMSManager
 
 
 class MarketStream(ABC):
@@ -20,7 +20,7 @@ class MarketStream(ABC):
         pairs: list,
         producer: AIOKafkaProducer,
         redis_manager: RedisManager,
-        async_pg_manager: PostgresManager,
+        async_pg_manager: DBMSManager,
         ws_url: str,
         limit_connections: int,
         limit_attempt: int,

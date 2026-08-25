@@ -17,15 +17,15 @@ from datetime import datetime, timezone
 
 from config.crypto.loader_sources import load_config_sources
 
-from dwh.dbms_utils import DBMSManager, PostgresSettings
+from dwh.postgres_utils import PGManager
 from dwh.queries.core.dql import select_filtered_values
 from dwh.queries.core.dml import insert_in_table
 from dwh.models.models_pg import pairs, event_log
 
 logger = logging.getLogger(__name__)
 
-settings_pg = PostgresSettings()
-sync_pg_manager = DBMSManager(settings_pg)
+
+sync_pg_manager = PGManager()
 sync_pg_manager.register_models(pairs, event_log)
 
 
@@ -83,7 +83,7 @@ async def main():
         kafka_manager = KafkaManager()
         kafka_manager.create_producer()
 
-        async_pg_manager = DBMSManager(settings_pg, use_async=True)
+        async_pg_manager = PGManager(use_async=True)
         async_pg_manager.register_models(event_log)
 
         streams = []
