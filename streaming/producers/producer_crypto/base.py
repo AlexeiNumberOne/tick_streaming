@@ -26,8 +26,8 @@ class MarketStream(ABC):
         limit_attempt: int,
         ttl_attempt: int,
         queue_size: int = 10_000,
-        filter_ping_pong: str | None = None,
-        ping_interval: int | None = 20,
+        filter_ping_pong: str = None,
+        ping_interval: int = 20,
     ):
         self.source_name = source_name
         self.market_type = market_type

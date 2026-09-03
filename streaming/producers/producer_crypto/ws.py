@@ -17,15 +17,15 @@ from datetime import datetime, timezone
 class WSInfo:
     """Данные о ws"""
 
-    ws: websockets.ClientConnection | None = None
+    ws: websockets.ClientConnection = None
     health: bool = False
-    created_at: int | None = None
-    started_at: int | None = None
-    pairs: list[str] | None = None
-    sub_msg: dict | None = None
-    last_tick_time: int | None = None
+    created_at: int = None
+    started_at: int = None
+    pairs: list[str] = None
+    sub_msg: dict = None
+    last_tick_time: int = None
     reconnects: int = 0
-    filter_ping_pong: None | str = None  # для 'bybit': "op"
+    filter_ping_pong: str = None  # для 'bybit': "op"
 
 
 class WSConnectionManager:
@@ -115,8 +115,8 @@ class WSConnectionHandler:
         exchange_info,
         process_message_func,
         queue: asyncio.Queue,
-        filter_ping_pong: str | None = None,
-        ping_interval: int | None = None,
+        filter_ping_pong: str = None,
+        ping_interval: int = None,
     ):
         self.limiter = limiter
         self.async_pg_manager = async_pg_manager

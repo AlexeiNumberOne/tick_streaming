@@ -1,4 +1,5 @@
-from sqlalchemy import Connection, text
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
 
 def create_mvw_ch(conn: Connection, intervals: dict) -> None:

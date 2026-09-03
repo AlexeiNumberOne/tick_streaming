@@ -1,6 +1,7 @@
 import logging
 
-from sqlalchemy import MetaData, Connection
+from sqlalchemy import MetaData
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.schema import CreateSchema
 

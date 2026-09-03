@@ -16,8 +16,9 @@
 #         result = conn.execute(query)
 #         return result.scalars().all()
 
-from sqlalchemy import Connection, Table, select
+from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.engine import Connection
 
 
 def select_filtered_values(
