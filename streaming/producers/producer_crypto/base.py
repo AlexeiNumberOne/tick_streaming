@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from abc import ABC, abstractmethod
 from aiokafka import AIOKafkaProducer
@@ -6,10 +7,12 @@ from typing import Iterator
 
 from streaming.producers.producer_crypto.state import exchange_state, ExchangeInfo
 from streaming.plugins.redis_utils import RateLimiter
-from streaming.producers.producer_crypto.ws import WSConnectionHandler
+from streaming.producers.producer_crypto.ws import WSManager, WSInfo
 from streaming.plugins.kafka_utils import KafkaWriter
 from streaming.plugins.redis_utils import RedisManager
 from dwh.dbms_utils import DBMSManager
+
+logger = logging.getLogger(__name__)
 
 
 class MarketStream(ABC):
@@ -27,7 +30,7 @@ class MarketStream(ABC):
         ttl_attempt: int,
         queue_size: int = 10_000,
         filter_ping_pong: str = None,
-        ping_interval: int = 20,
+        ws_ping_interval: float = 20.0,
     ):
         self.source_name = source_name
         self.market_type = market_type
@@ -40,7 +43,8 @@ class MarketStream(ABC):
         self.limit_attempt = limit_attempt
         self.ttl_attempt = ttl_attempt
         self.filter_ping_pong = filter_ping_pong
-        self.ping_interval = ping_interval
+        self.ws_ping_interval = ws_ping_interval
+        self.raw_queue = asyncio.Queue(maxsize=queue_size)
         self.queue = asyncio.Queue(maxsize=queue_size)
 
     @abstractmethod
@@ -66,6 +70,12 @@ class MarketStream(ABC):
     #     """
     #     pass
 
+    async def process_raw(self):
+        while True:
+            raw = await self.raw_queue.get()
+            for msg in self.process_message(raw):
+                await self.queue.put(msg)
+
     async def run(self):
         """Метод для запуска подписки websocket соединений бирж и записи в kafka тиков"""
         batches = self.create_batches_pairs(self.pairs)
@@ -86,21 +96,37 @@ class MarketStream(ABC):
             limit_connections=self.limit_connections,
             ttl_attempt=self.ttl_attempt,
         )
-        readers = []
+
+        ws_managers: list[WSManager] = []
+
         for batch in batches:
-            reader = WSConnectionHandler(
+            if not await limiter.access():
+                logger.warning("Превышено кол-во одновременных подключений")
+                return
+
+            sub_msg = self.build_sub_messages(batch)
+            ws_info = WSInfo(
+                exchange=self.source_name,
+                ws_url=self.ws_url,
+                ws_ping_interval=self.ws_ping_interval,
+                pairs=batch,
+                sub_msg=sub_msg,
+                filter_ping_pong=self.filter_ping_pong,
+            )
+            ws_manager = WSManager(
+                ws_url=self.ws_url,
+                ws_ping_interval=self.ws_ping_interval,
+                sub_msg=sub_msg,
+                raw_queue=self.raw_queue,
                 limiter=limiter,
                 async_pg_manager=self.async_pg_manager,
-                ws_url=self.ws_url,
-                batch=batch,
-                exchange_state=exchange_state,
-                build_sub_messages_func=self.build_sub_messages,
-                exchange_info=exchange_info,
-                process_message_func=self.process_message,
-                queue=self.queue,
-                filter_ping_pong=self.filter_ping_pong,
-                ping_interval=self.ping_interval,
+                ws_info=ws_info,
             )
-            readers.append(asyncio.create_task(reader.run()))
-        if readers:
-            await asyncio.gather(*readers)
+
+            ws_managers.append(ws_manager)
+            exchange_info.add_manager(manager=ws_manager)
+
+        reader_tasks = [asyncio.create_task(m.run()) for m in ws_managers]
+        process_raw_task = asyncio.create_task(self.process_raw())
+
+        await asyncio.gather(*reader_tasks, process_raw_task)

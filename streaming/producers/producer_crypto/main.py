@@ -32,13 +32,9 @@ sync_pg_manager.register_models(pairs, event_log)
 def shutdown(signum, frame):
     shutdown_time = datetime.fromtimestamp(int(time.time()), tz=timezone.utc)
     logging.warning(f"Принят сигнал {signum} в  {frame}")
-    redis_manager = RedisManager(use_async=False)
 
     data = []
-    event_type = "planned_shutdown"
-    if not redis_manager.planned_SIGTERM:
-        logger.warning(f"Незапланированный сигнал {signum}")
-        event_type = "emergency_shutdown"
+    event_type = "emergency_shutdown"
 
     for exchange in exchange_state.values():
         for ws in exchange.ws:
@@ -57,7 +53,7 @@ def shutdown(signum, frame):
     sync_pg_manager.execute_sync(
         insert_in_table, table=sync_pg_manager.models["event_log"], values=data
     )
-
+    redis_manager = RedisManager(use_async=False)
     redis_manager.delete_connections(exchange_state)
 
 
@@ -115,8 +111,8 @@ async def main():
         await kafka_manager.producer.start()
         await asyncio.gather(*(stream.run() for stream in streams))
 
-    except Exception:
-        logger.exception("Ошибка в main")
+    except Exception as e:
+        logger.exception(f"Ошибка в main: {e}")
         server_task.cancel()
         raise
 

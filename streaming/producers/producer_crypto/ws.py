@@ -2,8 +2,11 @@ import websockets
 import time
 import json
 import asyncio
+import logging
 
+from asyncio import Task
 from dataclasses import dataclass
+from websockets.protocol import State
 
 from streaming.plugins.redis_utils import RateLimiter
 
@@ -12,173 +15,159 @@ from dwh.postgres_utils import PGManager
 from dwh.queries.core.dml import insert_in_table
 from datetime import datetime, timezone
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class WSInfo:
     """Данные о ws"""
 
+    exchange: str = None
     ws: websockets.ClientConnection = None
+    ws_url: str = None
+    ws_ping_interval: float = None
     health: bool = False
     created_at: int = None
     started_at: int = None
     pairs: list[str] = None
     sub_msg: dict = None
-    last_tick_time: int = None
-    reconnects: int = 0
+    unplanned_reconnects: int = 0
     filter_ping_pong: str = None  # для 'bybit': "op"
 
 
-class WSConnectionManager:
+class WSManager:
     def __init__(
         self,
-        url: str,
+        ws_url,
+        ws_ping_interval,
+        sub_msg: dict,
+        raw_queue: asyncio.Queue,
+        limiter: RateLimiter,
         async_pg_manager: PGManager,
-        exchange_info,
-        ping_interval=None,
-        filter_ping_pong=None,
+        ws_info: WSInfo,
     ):
-        self._url = url
-        self.exchange_info = exchange_info
+        self.ws_url = ws_url
+        self.ws_ping_interval = ws_ping_interval
+        self.sub_msg = sub_msg
+        self.raw_queue = raw_queue
+        self.limiter = limiter
         self.async_pg_manager = async_pg_manager
-        self._ping_interval = ping_interval
-        self.filter_ping_pong = filter_ping_pong
-        self.info = WSInfo()
 
-    async def connect(self):
-        ws = await websockets.connect(self._url, ping_interval=self._ping_interval)
-        self.info.ws = ws
+        self._read_task: Task = None
+        self.info = ws_info
+
+    async def _create_connection(self):
+        ws = await websockets.connect(self.ws_url, ping_interval=self.ws_ping_interval)
         self.info.created_at = int(time.time())
+        return ws
 
-    async def subscribe(self):
-        if self.info.sub_msg is None:
-            raise ValueError("Нет сообщения для подписки")
-        await self.info.ws.send(json.dumps(self.info.sub_msg))
-        await self.info.ws.recv()
+    async def _subscribe(self, ws: websockets.ClientConnection):
+        await ws.send(json.dumps(self.sub_msg))
+        await ws.recv()
         self.info.started_at = int(time.time())
         self.info.health = True
 
-        connect_time = datetime.fromtimestamp(int(time.time()), tz=timezone.utc)
+    async def _reconnect(self, planned=True):
+        if not await self.limiter.access():
+            return
+
+        new_ws = await self._create_connection()
+        await self._subscribe(new_ws)
+        new_task = asyncio.create_task(self._put_raw(new_ws))
+        await asyncio.sleep(5)
+        old_ws = self.info.ws
+        old_task = self._read_task
+        self.info.ws = new_ws
+        self._read_task = new_task
+
+        if old_task:
+            old_task.cancel()
+            try:
+                await old_task
+            except asyncio.CancelledError:
+                pass
+
+        if old_ws and not old_ws.state == State.CLOSED:
+            print("удаляем старый ws")
+            await asyncio.sleep(1)
+            await old_ws.close()
+            await self.limiter.manager.r.decrby(
+                name=f"{self.info.exchange}:connections", amount=1
+            )
+
+        logger.info("Переподключение установлено успешно")
+
+        if not planned:
+            time_connection = datetime.fromtimestamp(int(time.time()), tz=timezone.utc)
+            await self._writer_event_log(
+                event_time=time_connection, event_type="reconnection"
+            )
+            logger.info("Данные о времени переподключения успешно сохранены")
+
+    async def _put_raw(self, ws=None):
+        try:
+            async for msg in ws or self.info.ws:
+                # Фильтр для бирж, где pong — это простая текстовая строка (OKX)
+                if isinstance(msg, str) and msg.strip() == "pong":
+                    continue
+
+                raw = json.loads(msg)
+                # Для Bybit
+                if self.info.filter_ping_pong:
+                    raw = dict(raw)
+                    filter_msg = raw.get(self.info.filter_ping_pong)
+                    if filter_msg == "ping":
+                        # Получен прикладной ping от сервера, нужно сразу ответить pong, самостоятельно
+                        await self.info.ws.send(json.dumps({"op": "pong"}))
+                        continue
+                    elif filter_msg == "pong":
+                        # Пропуск прикладного pong от bybit
+                        continue
+
+                await self.raw_queue.put(raw)
+
+        except websockets.ConnectionClosed:
+            shutdown_time = datetime.fromtimestamp(int(time.time()), tz=timezone.utc)
+            await self._writer_event_log(
+                event_time=shutdown_time, event_type="emergency_shutdown"
+            )
+            logger.warning("Соединение закрылось аварийно. Переподключение...")
+            self.info.unplanned_reconnects += 1
+            self.info.health = False
+            await self._reconnect(planned=False)
+
+        except Exception as e:
+            logger.error(f"Ошибка в _put_message: {e}")
+
+    async def _writer_event_log(self, event_time: int, event_type: str):
+        if event_type not in ["emergency_shutdown", "connection", "reconnection"]:
+            raise ValueError(f"Пришёл неверное событие: {event_type}")
         data = []
         for pair in self.info.pairs:
             data.append(
                 {
-                    "exchange": self.exchange_info.exchange,
+                    "exchange": self.info.exchange,
                     "pair": pair,
-                    "event_type": "connection",
-                    "event_time": connect_time,
+                    "event_type": event_type,
+                    "event_time": event_time,
                 }
             )
-        await self.async_pg_manager.execute_async(
-            insert_in_table,
-            table=self.async_pg_manager.models["event_log"],
-            values=data,
-        )
-
-    async def reconnect(self):
-        if self.info.ws:
-            await self.info.ws.close()
-
-        await self.connect()
-        self.info.reconnects += 1
-
-    async def get_message(self):
-        async for msg in self.info.ws:
-            # Фильтр для бирж, где pong — это простая текстовая строка (OKX)
-            if isinstance(msg, str) and msg.strip() == "pong":
-                continue
-
-            raw = json.loads(msg)
-
-            # Для Bybit
-            if self.info.filter_ping_pong:
-                filter_msg = raw.get(self.info.filter_ping_pong)
-                if filter_msg == "ping":
-                    # Получен прикладной ping от сервера, нужно сразу ответить pong, самостоятельно
-                    await self.info.ws.send(json.dumps({"op": "pong"}))
-                    continue
-                elif filter_msg == "pong":
-                    # Пропуск прикладного pong от bybit
-                    continue
-
-            return raw
-
-
-class WSConnectionHandler:
-    def __init__(
-        self,
-        limiter: RateLimiter,
-        async_pg_manager: PGManager,
-        ws_url: str,
-        batch: list,
-        exchange_state: dict,
-        build_sub_messages_func,
-        exchange_info,
-        process_message_func,
-        queue: asyncio.Queue,
-        filter_ping_pong: str = None,
-        ping_interval: int = None,
-    ):
-        self.limiter = limiter
-        self.async_pg_manager = async_pg_manager
-        self.ws_url = ws_url
-        self.batch = batch
-        self.exchange_state = exchange_state
-        self.build_sub_messages_func = build_sub_messages_func
-        self.exchange_info = exchange_info
-        self.process_message_func = process_message_func
-        self.queue = queue
-        self.filter_ping_pong = filter_ping_pong
-        self.ping_interval = ping_interval
+            await self.async_pg_manager.execute_async(
+                insert_in_table,
+                table=self.async_pg_manager.models["event_log"],
+                values=data,
+            )
 
     async def run(self):
-        """Создаёт websocket соединение"""
-        if not await self.limiter.access():
-            return
-        manager = WSConnectionManager(
-            url=self.ws_url,
-            exchange_info=self.exchange_info,
-            async_pg_manager=self.async_pg_manager,
-            ping_interval=self.ping_interval,
-            filter_ping_pong=self.filter_ping_pong,
+        ws = await self._create_connection()
+        self.info.ws = ws
+        await self._subscribe(ws=ws)
+        self._read_task = asyncio.create_task(self._put_raw(ws=ws))
+        time_connection = datetime.fromtimestamp(int(time.time()), tz=timezone.utc)
+        await self._writer_event_log(
+            event_time=time_connection, event_type="connection"
         )
-        await manager.connect()
-        self.exchange_state[
-            f"{self.exchange_info.exchange}-{self.exchange_info.market_type}"
-        ].add_manager(manager=manager)
-        manager.info.pairs = self.batch
-        manager.info.sub_msg = self.build_sub_messages_func(self.batch)
-        await manager.subscribe()
-
         while True:
-            try:
-                raw = await manager.get_message()
-                self.exchange_info.log_count_received_ticks += 1
-                for msg in self.process_message_func(raw):
-                    await self.queue.put(msg)
-            except websockets.ConnectionClosed:
-                shutdown_time = datetime.fromtimestamp(
-                    int(time.time()), tz=timezone.utc
-                )
-                manager.info.health = False
-                self.limiter.manager.r.decrby(
-                    name=f"{self.exchange_info.exchange}:connections", amount=1
-                )
-                data = []
-                for pair in manager.info.pairs:
-                    data.append(
-                        {
-                            "exchange": self.exchange_info.exchange,
-                            "pair": pair,
-                            "event_type": "emergency_shutdown",
-                            "event_time": shutdown_time,
-                        }
-                    )
-                await self.async_pg_manager.execute_async(
-                    insert_in_table,
-                    table=self.async_pg_manager.models["event_log"],
-                    values=data,
-                )
-                if not await self.limiter.access():
-                    return
-                await manager.reconnect()
-                await manager.subscribe()
+            await asyncio.sleep(23 * 3600 + 30 * 60)
+            logger.warning("Плановое переподключение WS")
+            await self._reconnect(planned=True)
