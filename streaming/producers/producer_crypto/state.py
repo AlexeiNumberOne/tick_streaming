@@ -1,4 +1,4 @@
-from streaming.producers.producer_crypto.ws import WSConnectionManager
+from streaming.producers.producer_crypto.ws import WSManager
 
 
 class ExchangeInfo:
@@ -10,13 +10,13 @@ class ExchangeInfo:
         self.exchange = exchange
         self.market_type = market_type
         self.expected_ws = expected_ws
-        self.ws: list[WSConnectionManager] = []
+        self.ws: list[WSManager] = []
         self.log_count_deliveries = 0
         self.log_count_in_buffer = 0
         self.log_count_errors = 0
         self.log_count_received_ticks = 0
 
-    def add_manager(self, manager: WSConnectionManager):
+    def add_manager(self, manager: WSManager):
         self.ws.append(manager)
 
     @property

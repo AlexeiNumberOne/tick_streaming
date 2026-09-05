@@ -8,7 +8,8 @@ from dwh.models.models_ch import raw_ticks
 from dwh.queries.raw.dml import insert_json_rows
 
 TOPICS = ["binance"]
-BATCH_SIZE = 1000
+BATCH_SIZE = 10000
+DELAY_INSERT = 10
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +28,20 @@ async def main():
 
     batch: list[dict] = []
 
+    last_insert = asyncio.get_event_loop().time()
+
     async for msg in kafka_manager.consumer:
+        now = asyncio.get_event_loop().time()
         msg_value = msg.value
         batch.append(msg_value)
 
-        if len(batch) >= BATCH_SIZE:
+        if now - last_insert >= DELAY_INSERT or len(batch) >= BATCH_SIZE:
             await async_ch_manager.execute_async(
                 insert_json_rows, table=async_ch_manager.models["raw_ticks"], data=batch
             )
             batch = []
             await kafka_manager.consumer.commit()
+            last_insert = asyncio.get_event_loop().time()
 
 
 if __name__ == "__main__":

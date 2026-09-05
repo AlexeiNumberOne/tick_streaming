@@ -1,7 +1,8 @@
 import logging
 
-from sqlalchemy import Connection, insert, Table
+from sqlalchemy import insert, Table
 from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.engine import Connection
 
 logger = logging.getLogger(__name__)
 
