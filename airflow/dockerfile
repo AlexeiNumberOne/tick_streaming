@@ -1,9 +1,16 @@
-FROM apache/airflow:2.11.0-python3.11
+FROM apache/airflow:2.11.0-python3.11 AS dev
 
-RUN pip install --upgrade pip && \
-    pip install --upgrade \
-        apache-airflow-providers-cncf-kubernetes==10.16.1 \
-        cryptography==44.0.3 \
-        pyOpenSSL==25.1.0 \
-        boto3==1.37.3 \
-        apache-airflow-providers-amazon
+USER airflow
+
+# Отключаем PIP_USER для работы с venv
+ENV PIP_USER=false
+
+COPY dbt/requirements_dbt.txt /opt/requirements_dbt.txt
+COPY airflow/requirements_airflow.txt /opt/requirements_airflow.txt
+
+RUN python -m venv /home/airflow/dbt_venv && \
+    /home/airflow/dbt_venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /home/airflow/dbt_venv/bin/pip install --no-cache-dir -r /opt/requirements_dbt.txt && \
+    /home/airflow/dbt_venv/bin/dbt --version
+
+RUN pip install --no-cache-dir -r /opt/requirements_airflow.txt
