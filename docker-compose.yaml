@@ -1,0 +1,347 @@
+x-postgres: &postgres
+  image: postgres:16
+  networks:
+    - full-network
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+    start_period: 5s
+  restart: always
+
+x-airflow: &airflow
+  image: custom/airflow:2.11.0
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment:
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__WEBSERVER__SECRET_KEY: ''
+    AIRFLOW_VAR_API_KEY: ${AIRFLOW_VAR_API_KEY}
+    AIRFLOW_CONN_CLICKHOUSE_CREATE_CANDLES: >
+      {
+        "conn_type": "generic",
+        "host": "${CH_HOST}",
+        "port": "${CH_PORT}",
+        "login": "${CH_USER}",
+        "password": "${CH_PASS}",
+        "schema": "${CH_NAME}"
+      }
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./config:/opt/airflow/config
+    - ./dbt:/opt/dbt/
+  networks:
+    - full-network
+  depends_on:
+    postgres-airflow:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    airflow-init:
+      condition: service_completed_successfully
+
+services:
+  postgres-airflow:
+    <<: *postgres
+    container_name: postgres-airflow
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-volume:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+
+  airflow-init:
+    build:
+      context: .
+      dockerfile: airflow/dockerfile
+      target: dev
+    image: custom/airflow:2.11.0
+    <<: *airflow
+    container_name: airflow-init
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__FERNET_KEY: 'cTFE9LhK6yX5Qnvidyao7qgHDHhow33LpJ0JaYy5J5Y='
+      AIRFLOW__WEBSERVER__SECRET_KEY: 'your-secret-key-change-me-12345'
+    command: >
+      bash -c "
+      airflow db init &&
+      airflow users create \
+      --username ${AIRFLOW_ADMIN_USER:-admin} \
+      --password ${AIRFLOW_ADMIN_PASSWORD:-admin} \
+      --firstname Admin \
+      --lastname User \
+      --role Admin \
+      --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com}
+      "
+    volumes:
+      - ./config:/opt/airflow/config
+
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  airflow-webserver:
+    <<: *airflow
+    container_name: airflow-webserver
+    ports:
+      - "8080:8080"
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow
+    container_name: airflow-scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "bash", "-c", "airflow jobs check --job-type SchedulerJob --hostname $$(hostname)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  airflow-worker-1:
+    <<: *airflow
+    container_name: airflow-worker-1
+    command: airflow celery worker
+    healthcheck:
+      test: ["CMD", "celery", "-A", "airflow.executors.celery_executor", "inspect", "ping", "-d", "celery@$$(hostname)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    restart: always
+    ports:
+      - "6379:6379"
+    networks:
+      - full-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 2g
+
+  postgres-dwh:
+    <<: *postgres
+    container_name: postgres-dwh
+    environment:
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASS}
+      POSTGRES_DB: ${PG_NAME}
+    volumes:
+      - ./postgres_dwh/data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+
+  clickhouse-dwh:
+    image: clickhouse/clickhouse-server:25.1
+    container_name: clickhouse-dwh
+    ports:
+      - "8123:8123"   # HTTP интерфейс
+      - "9009:9000"   # Нативный интерфейс
+    volumes:
+      - ./clickhouse_data:/var/lib/clickhouse
+    environment:
+      CLICKHOUSE_DB: ${CH_NAME}
+      CLICKHOUSE_USER: ${CH_USER}
+      CLICKHOUSE_PASSWORD: ${CH_PASS}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - full-network
+    restart: unless-stopped
+
+  init-dwh:
+    build:
+      context: ./dwh/init_dwh
+      dockerfile: dockerfile.init
+      target: dev
+    image: custom/init-dwh:latest
+    container_name: init-dwh
+    environment:
+      PG_HOST: ${PG_HOST}
+      PG_PORT: ${PG_PORT}
+      PG_USER: ${PG_USER}
+      PG_PASS: ${PG_PASS}
+      PG_NAME: ${PG_NAME}
+
+      CH_HOST: ${CH_HOST}
+      CH_PORT: ${CH_PORT}
+      CH_USER: ${CH_USER}
+      CH_PASS: ${CH_PASS}
+      CH_NAME: ${CH_NAME}
+    depends_on:
+      postgres-dwh:
+        condition: service_healthy
+      clickhouse-dwh:
+        condition: service_healthy
+    volumes:
+      - ./dwh:/app/dwh
+      - ./config:/app/config
+    command: ["python", "-u", "-m", "dwh.init_dwh.main"]
+    networks:
+    - full-network
+
+  controller1:
+    image: apache/kafka:4.0.2
+    user: root
+    container_name: controller1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: controller
+      KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller1:9093
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - ./kafka/data/controller1_data:/var/lib/kafka/data
+      - controller1_data:/var/lib/kafka/data
+    networks:
+      - full-network
+
+  broker1:
+    image: apache/kafka:4.0.2
+    user: root
+    container_name: broker1
+    depends_on:
+      - controller1
+    environment:
+      KAFKA_NODE_ID: 101
+      KAFKA_PROCESS_ROLES: broker
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker1:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT, CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller1:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 50
+    ports:
+      - "9092:9092"
+    volumes:
+      - ./kafka/data/broker1_data:/tmp/kafka-logs
+      - broker1_data:/tmp/kafka-logs
+    networks:
+      - full-network
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: kafka-ui
+    depends_on:
+      - broker1
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: broker1:9092
+    networks:
+      - full-network
+
+  producer_crypto:
+    build:
+      context: ./streaming/producers/producer_crypto
+      dockerfile: dockerfile.crypto
+      target: dev
+    image: custom/producer_crypto:latest
+    container_name: producer_crypto
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: broker1:9092
+      PG_HOST: ${PG_HOST}
+      PG_PORT: ${PG_PORT}
+      PG_USER: ${PG_USER}
+      PG_PASS: ${PG_PASS}
+      PG_NAME: ${PG_NAME}
+    depends_on:
+      init-dwh:
+        condition: service_completed_successfully
+      broker1:
+        condition: service_healthy
+    volumes:
+      - ./streaming/plugins:/app/streaming/plugins
+      - ./streaming/producers:/app/streaming/producers
+      - ./dwh/models:/app/dwh/models
+      - ./dwh/queries/core:/app/dwh/queries/core
+      - ./dwh/dbms_utils.py:/app/dwh/dbms_utils.py
+      - ./dwh/postgres_utils.py:/app/dwh/postgres_utils.py
+      - ./config:/app/config
+    restart: unless-stopped
+    command: ["python", "-u", "-m", "streaming.producers.producer_crypto.main"]
+    networks:
+      - full-network
+
+  consumer_clickhouse:
+    build:
+      context: ./streaming/consumers/consumer_clickhouse
+      dockerfile: dockerfile
+      target: dev
+    image: custom/consumer_clickhouse:latest
+    container_name: consumer_clickhouse
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: broker1:9092
+
+      CH_HOST: ${CH_HOST}
+      CH_PORT: ${CH_PORT}
+      CH_USER: ${CH_USER}
+      CH_PASS: ${CH_PASS}
+      CH_NAME: ${CH_NAME}
+    volumes:
+      - ./streaming/consumers:/app/streaming/consumers
+      - ./streaming/plugins:/app/streaming/plugins
+      - ./dwh:/app/dwh
+      - ./config:/app/config
+    depends_on:
+      init-dwh:
+        condition: service_completed_successfully
+      broker1:
+        condition: service_healthy
+    command: ["python", "-u", "-m", "streaming.consumers.consumer_clickhouse.main"]
+    networks:
+      - full-network
+
+volumes:
+  postgres-volume:
+  broker1_data:
+  controller1_data:
+
+networks:
+  full-network:
+    name: full-network
+    driver: bridge
