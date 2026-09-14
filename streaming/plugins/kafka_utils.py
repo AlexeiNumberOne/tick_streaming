@@ -157,7 +157,7 @@ class KafkaWriter:
             task.result()
             self.exchange_info.log_count_deliveries += 1
         except Exception as e:
-            print(f"Ошибка при отправке: {e}")
+            logger.error(f"Ошибка при отправке: {e}")
             self.exchange_info.log_count_errors += 1
 
     async def _send_message(self, msg):
