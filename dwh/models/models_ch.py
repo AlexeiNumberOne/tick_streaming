@@ -17,7 +17,7 @@ def raw_ticks(metadata_obj_ch: MetaData) -> Table:
         engines.MergeTree(
             order_by=("source", "market_type", "symbol", "timestamp"),
             partition_by=text("toDate(timestamp)"),
-            ttl=text("toDateTime(timestamp) + INTERVAL 2 DAY DELETE"),
+            ttl=text("toDate(timestamp) + INTERVAL 2 DAY DELETE"),
         ),
     )
 

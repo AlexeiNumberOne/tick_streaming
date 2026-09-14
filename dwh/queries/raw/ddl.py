@@ -31,3 +31,29 @@ def create_mvw_ch(conn: Connection, intervals: dict) -> None:
         )
 
     conn.commit()
+
+
+def create_bridge_table(
+    conn: Connection, PG_TABLE, PG_HOST, PG_PORT, PG_DB, PG_USER, PG_PASSWORD, PG_SCHEMA
+):
+    conn.execute(
+        text(
+            f"""
+            CREATE TABLE IF NOT EXISTS invalid_candles_bridge (
+                source String,
+                market_type String,
+                symbol String,
+                start_candle DateTime
+            ) ENGINE = PostgreSQL(
+                '{PG_HOST}:{PG_PORT}',
+                '{PG_DB}',
+                '{PG_TABLE}',
+                '{PG_USER}',
+                '{PG_PASSWORD}',
+                '{PG_SCHEMA}',
+                'ON CONFLICT (source, market_type, symbol, start_candle) DO NOTHING'
+            )
+            """
+        )
+    )
+    conn.commit()

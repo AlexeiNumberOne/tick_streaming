@@ -23,7 +23,8 @@ class CHManager(DBMSManager):
             )
         else:
             self.engine = create_engine(
-                f"clickhouse+native://{self.USER}:{self.PASS}@{self.HOST}:{self.PORT}/{self.NAME}"
+                f"clickhouse+native://{self.USER}:{self.PASS}@{self.HOST}:{self.PORT}/{self.NAME}",
+                echo=True,
             )
 
         super().__init__(engine=self.engine)

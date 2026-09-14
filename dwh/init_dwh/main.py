@@ -3,14 +3,12 @@ import logging
 
 from dwh.postgres_utils import PGManager
 from dwh.clickhouse_utils import CHManager
-from dwh.models.models_pg import pairs, event_log
-from dwh.models.models_ch import candle_table, raw_ticks
+from dwh.models.models_pg import pairs
+from dwh.models.models_ch import raw_ticks
 from dwh.queries.core.ddl import create_schemas, create_tables
 from dwh.queries.core.dml import insert_in_table
-from dwh.queries.raw.ddl import create_mvw_ch
 
 from config.crypto.loader_sources import load_config_sources
-from config.config import INTERVAL_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +50,9 @@ def rest_get_pairs(exchange: str, needed_types: list) -> list[dict]:
 
 def main():
     pg_manager = PGManager()
-    pg_manager.register_models(pairs, event_log)
-    pg_manager.execute_sync(create_schemas, "crypto")
+    pg_schema = "crypto"
+    pg_manager.execute_sync(create_schemas, pg_schema)
+    pg_manager.register_models(pairs)
     pg_manager.execute_sync(create_tables, pg_manager.metadata)
 
     exchanges = load_config_sources()
@@ -70,10 +69,7 @@ def main():
 
     ch_manager = CHManager()
     ch_manager.register_models(raw_ticks)
-    for interval in INTERVAL_MAP:
-        ch_manager.register_models(candle_table, interval=interval)
     ch_manager.execute_sync(create_tables, ch_manager.metadata)
-    ch_manager.execute_sync(create_mvw_ch, intervals=INTERVAL_MAP)
 
 
 if __name__ == "__main__":
