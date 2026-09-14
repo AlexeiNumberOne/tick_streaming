@@ -3,7 +3,7 @@ import logging
 
 from dwh.postgres_utils import PGManager
 from dwh.clickhouse_utils import CHManager
-from dwh.models.models_pg import pairs
+from dwh.models.models_pg import pairs, event_log
 from dwh.models.models_ch import raw_ticks
 from dwh.queries.core.ddl import create_schemas, create_tables
 from dwh.queries.core.dml import insert_in_table
@@ -52,7 +52,7 @@ def main():
     pg_manager = PGManager()
     pg_schema = "crypto"
     pg_manager.execute_sync(create_schemas, pg_schema)
-    pg_manager.register_models(pairs)
+    pg_manager.register_models(pairs, event_log)
     pg_manager.execute_sync(create_tables, pg_manager.metadata)
 
     exchanges = load_config_sources()
