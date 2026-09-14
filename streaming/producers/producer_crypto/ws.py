@@ -152,11 +152,11 @@ class WSManager:
                     "event_time": event_time,
                 }
             )
-            await self.async_pg_manager.execute_async(
-                insert_in_table,
-                table=self.async_pg_manager.models["event_log"],
-                values=data,
-            )
+        await self.async_pg_manager.execute_async(
+            insert_in_table,
+            table=self.async_pg_manager.models["event_log"],
+            values=data,
+        )
 
     async def run(self):
         ws = await self._create_connection()
